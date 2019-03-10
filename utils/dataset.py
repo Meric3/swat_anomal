@@ -28,7 +28,7 @@ def pca_return(train_path, test_path, validation = False):
 	train_index = normal_data.index
 	test_index = attack_data.index
  
-	scaler = sklearn.preprocessing.StandardScaler()
+	scaler = sklearn.preprocessing.StandardScaler(with_std=False)
 	scaler.fit(train_x)
 
 	# train zero center about train data

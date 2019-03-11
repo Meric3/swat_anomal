@@ -102,3 +102,13 @@ venv.bak/
 
 # mypy
 .mypy_cache/
+
+#tensorflow log
+/tf_logs
+
+#torch model save
+/model_save
+
+#log
+.log.txt
+

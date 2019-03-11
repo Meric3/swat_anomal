@@ -1,6 +1,10 @@
 import torch
 from torch.autograd import Variable
 import numpy as np
+from sklearn import metrics
+from numpy import linalg as LA
+import numpy as np
+from astropy.convolution import Gaussian1DKernel, convolve
 
 def get_anomalscore_encdec(base_model, generate_batchfy, length,args):
     outSeq = []
@@ -9,7 +13,7 @@ def get_anomalscore_encdec(base_model, generate_batchfy, length,args):
     base_model.decoder.eval()
     hidden_enc = base_model.encoder.init_hidden(1)
     endPoint = length #446000 
-    step = args['seq_length']
+    step = args.seq_length
     feature_dim = generate_batchfy.size(-1)
 
     for i in range(0,endPoint,step):
@@ -49,7 +53,7 @@ def get_anomalscore_minmax(base_model, generate_batchfy, length,args):
     base_model.decoder.eval()
     hidden_enc = base_model.encoder.init_hidden(1)
     endPoint = length #446000 
-    step = args['seq_length']
+    step = args.seq_length
     feature_dim = generate_batchfy.size(-1)
 
     for i in range(0,endPoint,step):
@@ -75,32 +79,30 @@ def get_anomalscore_minmax(base_model, generate_batchfy, length,args):
 
 
 
-def evaluate_conv(nomalize_scores, num_samples, conv, check_step,attack_list ,length,prints,args):
-    check_step = check_step
-    endPoint = length
-    
-    norm = LA.norm(nomalize_scores, axis=1)
-    
-    if conv != 0 :
-        gauss_kernel = Gaussian1DKernel(conv)
-        norm = convolve(norm, gauss_kernel)
+def evaluate_conv(anomal_score, test_y, attack_list):
+    max_f1 = 0
 
-    
-    maximum = norm.max()
-    th = np.linspace(0, maximum, num_samples)
-    precision_ = []
-    recall_ = []
-    score_ = []
-    attack_list_ = []
-    for j in range(check_step):
-        anomaly = (norm > th[j])
-        anomaly = anomaly.astype(np.int16)
-        pr = precision_score(args['test_y'][:endPoint].cpu().numpy(),anomaly)
-        re = recall_score(args['test_y'][:endPoint].cpu().numpy(),anomaly)
-        precision_.append(pr)
-        recall_.append(re)
-        score_.append(2/((1/re) + (1/pr)))
+#     anomal_score = LA.norm(anomal_score, axis=1)
+
+    for conv in range(0, 100, 10):
+        if conv != 0:
+            gauss_kernel = Gaussian1DKernel(conv)
+            norm = convolve(anomal_score, gauss_kernel)
+        else:
+            norm = anomal_score
+
+        precision, recall, thresholds = metrics.precision_recall_curve(  test_y[:449916].cpu().numpy(), norm ,pos_label =1)
+
+        beta = 1
+        f1 = (1+beta**2)*(precision*recall)/((beta**2*precision)+recall)
+        f1 = np.nan_to_num(f1)
+
+        max_pre_tp = precision[np.argmax(f1)]
+        max_recall_tp = recall[np.argmax(f1)]
+        max_f1_tp = f1[np.argmax(f1)]
+
         attack_list_acc = []
+        anomaly = (norm > thresholds[np.argmax(f1)] )
         for idxx in range(0, len(attack_list)):
             k, t = np.unique(anomaly[attack_list['Start Time'][idxx]:attack_list['End Time'][idxx]], return_counts=True)
             if t.shape[0] > 1:
@@ -111,23 +113,18 @@ def evaluate_conv(nomalize_scores, num_samples, conv, check_step,attack_list ,le
                 attack_list_acc.append(0.0)
             else:
                 print("faral error in evaluation")
-        attack_list_.append(attack_list_acc)
 
-    tp = 0
-    idx = 0
-    for i in range(len(score_)):
-        if tp < score_[i]:
-            tp = score_[i]
-            idx = i
-    last_anomal = anomaly = (norm > th[idx])
-    last_anomal = last_anomal.astype(np.int16)
-    
-    zerolist = 0
-    for nonzero in range(len(attack_list_[idx])):
-        if attack_list_[idx][nonzero] == 0.0:
-            zerolist = zerolist + 1            
-            
-    if prints == True :
-        print('-'*100)
-        print("conv : ",conv,"idx : ",idx,"recall : ", recall_[idx], "precision : ",precision_[idx], "F1 measure : ",score_[idx], " accure_attack_num : ", 36 - zerolist )
-    return recall_, precision_, score_, attack_list_, idx, last_anomal
+        zerolist = 0
+        for k in range(len(attack_list_acc)):
+            if attack_list_acc[k] == 0.0:
+                zerolist = zerolist + 1  
+
+        if max_f1 < max_f1_tp:
+            max_pre = max_pre_tp
+            max_recall = max_recall_tp
+            max_f1 = max_f1_tp
+            max_zerolist = zerolist
+            max_conv = conv
+
+#     print("conv[{}]\t precision[{}]\t recall[{}]\t f1[{}] \t find attack [{}]".format(max_conv, max_pre, max_recall, max_f1, 36 - max_zerolist))
+    return max_conv, max_pre, max_recall, max_f1, max_zerolist

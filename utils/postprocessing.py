@@ -6,13 +6,18 @@ from numpy import linalg as LA
 import numpy as np
 from astropy.convolution import Gaussian1DKernel, convolve
 
-def get_anomalscore_encdec(base_model, generate_batchfy, length,args):
+def get_anomalscore_encdec(base_model, generate_batchfy, length,args, cv_list):
+# cross validation
+    generate_batchfy = generate_batchfy[cv_list[0][1],:,:]
+    print(generate_batchfy.shape)
+
+# 
     outSeq = []
     scores = []
     base_model.encoder.eval()
     base_model.decoder.eval()
     hidden_enc = base_model.encoder.init_hidden(1)
-    endPoint = length #446000 
+    endPoint = generate_batchfy.shape[0]
     step = args.seq_length
     feature_dim = generate_batchfy.size(-1)
 
@@ -34,7 +39,7 @@ def get_anomalscore_encdec(base_model, generate_batchfy, length,args):
     outSeq = torch.cat(outSeq,dim=0)
     mean = outSeq.mean(dim=0)
     conv_inv = torch.inverse(torch.from_numpy(np.cov((outSeq-mean).t().detach().numpy()))).type(torch.FloatTensor)
-    print("anomal_detection...")
+#     print("anomal_detection...")
     
     for i in range(0,endPoint):
         score = torch.mm(torch.add(outSeq[i], -mean.view(feature_dim,-1).t()),  torch.mm(conv_inv,  torch.add(outSeq[i], -mean.view(feature_dim,-1))))
@@ -76,15 +81,51 @@ def get_anomalscore_minmax(base_model, generate_batchfy, length,args):
     return outSeq - outSeq.min(axis=0) / (outSeq.max(axis=0) - outSeq.min(axis=0) )
 #     return outSeq - outSeq.min(dim=0)[0] / (outSeq.max(dim=0)[0]  - outSeq.min(dim=0)[0] )
 
+def get_anomalscore_encdec_1dim(base_model, generate_batchfy, length,args, cv_list):
+   
+    outSeq = []
+    scores = []
+    base_model.encoder.eval()
+    base_model.decoder.eval()
+    hidden_enc = base_model.encoder.init_hidden(1)
+    endPoint = length #446000 
+    step = args.seq_length
+    feature_dim = generate_batchfy.size(-1)
+
+    for i in range(0,endPoint,step):
+        Outputseq_enc, hidden_enc = base_model.encoder.forward(Variable(generate_batchfy[i:i+step]).cuda(), hidden_enc)
+        deccoder_input = Variable(torch.zeros(Outputseq_enc.size())).cuda()
+        deccoder_input[0,:,:] = Outputseq_enc[-1,:,:]
+        try:
+            deccoder_input[1:,:,:] = generate_batchfy[i+step:i+step+step-1,:,:]
+        except:
+            continue
+        Outputseq_enc, hidden_enc = base_model.decoder.forward(deccoder_input, hidden_enc, return_hiddens=True)
+        if Outputseq_enc.size()[0] != generate_batchfy[i:i+step].size()[0] :
+            continue
+        error = torch.abs(torch.add( Outputseq_enc.view(-1,generate_batchfy.size(-1)).cpu(), \
+                                -generate_batchfy[i:i+step].view(-1,generate_batchfy.size(-1)).cpu()))       
+        outSeq.append(error)
+        
+    outSeq = torch.cat(outSeq,dim=0)
+    mean = outSeq.mean(dim=0)
+    var = outSeq.std(dim=0)**2
+#     print("anomal_detection...")
+    
+    scores = (outSeq - mean)*(outSeq - mean)/(var)
+    
+    scores = scores.detach().numpy()
+    nomalize_scores =  (scores - scores.mean(axis=0))/scores.var(axis=0)
+    return nomalize_scores
 
 
 
-def evaluate_conv(anomal_score, test_y, attack_list):
+def evaluate_conv(anomal_score, test_y, attack_list, conv):
     max_f1 = 0
 
 #     anomal_score = LA.norm(anomal_score, axis=1)
 
-    for conv in range(0, 100, 10):
+    for conv in range(0, conv, 10):
         if conv != 0:
             gauss_kernel = Gaussian1DKernel(conv)
             norm = convolve(anomal_score, gauss_kernel)
@@ -113,6 +154,11 @@ def evaluate_conv(anomal_score, test_y, attack_list):
                 attack_list_acc.append(0.0)
             else:
                 print("faral error in evaluation")
+                
+        find_attack_list = []
+        for k in range(len(attack_list_acc)):
+            if attack_list_acc[k] != 0.0:
+                find_attack_list.append(k)               
 
         zerolist = 0
         for k in range(len(attack_list_acc)):
@@ -125,6 +171,7 @@ def evaluate_conv(anomal_score, test_y, attack_list):
             max_f1 = max_f1_tp
             max_zerolist = zerolist
             max_conv = conv
+            max_find_attack_list = find_attack_list
 
 #     print("conv[{}]\t precision[{}]\t recall[{}]\t f1[{}] \t find attack [{}]".format(max_conv, max_pre, max_recall, max_f1, 36 - max_zerolist))
-    return max_conv, max_pre, max_recall, max_f1, max_zerolist
+    return max_conv, max_pre, max_recall, max_f1, max_zerolist, max_find_attack_list

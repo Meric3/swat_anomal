@@ -110,5 +110,7 @@ venv.bak/
 /model_save
 
 #log
-.log.txt
+log.txt
 
+#log dir
+/log

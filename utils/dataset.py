@@ -20,36 +20,103 @@ def swat_preprocessing(train, test, validation = False):
     test_y[test_y == 'Normal'] = 0
     return train_x, test_x, test_y
 
-def pca_return(train_path, test_path, validation = False):
+def pca_return(x_train, x_test, variance = True):
+    if variance == False:
+        scaler = sklearn.preprocessing.StandardScaler(with_std = False)
+    else:
+        scaler = sklearn.preprocessing.StandardScaler()
+    scaler.fit(x_train)
+    
+    # train zero center about train data. For fairness test dataset scaled from x_train information
+    x_train = scaler.transform(x_train)
+    x_test = scaler.transform(x_test)
+
+    pca = PCA(n_components = np.shape(x_train)[1])
+    pca.fit(x_train)
+    
+    x_train = pca.transform(x_train)
+    x_test = pca.transform(x_test)
+    
+    return x_train, x_test
+
+
+def lstm_dataset(train_path, test_path):
+    x_train, y_train, x_test, y_test = base_dataset(train_path, test_path)
+
+    # SInce sklearn osvm property, set atk = -1, normal = 1
+    y_train[y_train == 'Attack'] = 1
+    y_train[y_train == 'Normal'] = 0
+    y_test[y_test == 'Attack'] = 1
+    y_test[y_test == 'Normal'] = 0
+    
+    y_train = torch.FloatTensor(y_train).cuda()
+    y_test = torch.FloatTensor(y_test).cuda()    
+    
+    x_train, x_test = pca_return(x_train, x_test)
+    
+    x_train = torch.FloatTensor(x_train).cuda()
+    x_test = torch.FloatTensor(x_test).cuda()
+    
+    return  x_train, x_test,  y_test    
+    
+
+
+def base_dataset(train_path, test_path, isprint = False):
     #load data
-    normal_data=pd.read_csv(train_path,index_col = 0)
-    attack_data=pd.read_csv(test_path,index_col = 0)
+    normal_data = pd.read_csv(train_path, index_col = 0)
+    attack_data = pd.read_csv(test_path, index_col = 0)
 
-    train_x, test_x, test_y = swat_preprocessing(normal_data, attack_data)
+    x_col = list(normal_data.columns)[:-1]
+    y_col = list(normal_data.columns)[-1]
 
-    # label index
-    train_index = normal_data.index
-    test_index = attack_data.index
+    X_normal = normal_data[x_col]
+    Y_normal = normal_data[y_col]
+
+    X_attack = attack_data[x_col]
+    Y_attack = attack_data[y_col]
+    
+    if (isprint == True):
+        unique, counts = np.unique(Y_normal, return_counts=True)
+        print('In train :', dict(zip(unique, counts)))
+        unique, counts = np.unique(Y_attack, return_counts=True)
+        print('In test :', dict(zip(unique, counts)))     
+        print("data length is {}".format(len(x_col)))
+    
+    return X_normal, Y_normal, X_attack, Y_attack
  
-    scaler = sklearn.preprocessing.StandardScaler(with_std=False)
-    scaler.fit(train_x)
 
-    # train zero center about train data
-    train_x = scaler.transform(train_x)
-    test_x = scaler.transform(test_x)
+def check(data) :
+    if -1 in data :
+        return -1
+    else : 
+        return 1
+    
+def svm_dataset(train_path, test_path):
+    x_train, y_train, x_test, y_test = base_dataset(train_path, test_path)
 
-    pca = PCA(n_components = train_x.shape[1])
+    # SInce sklearn osvm property, set atk = -1, normal = 1
+    y_train[y_train == 'Attack'] = -1
+    y_train[y_train == 'Normal'] = +1
+    y_test[y_test == 'Attack'] = -1
+    y_test[y_test == 'Normal'] = +1      
 
-    pca.fit(train_x)
-    train_x = pca.transform(train_x)
-    test_x = pca.transform(test_x)
-    """ 
-    train_row = X_train.size(0)
-    train_col = X_train.size(1)
-    test_row = X_test.size(0) 
-    test_col = X_test.size(1)
-    """
-    return train_x, test_x, test_y 
+    x_train, x_test = pca_return(x_train, x_test,False)
+
+    x_train = pd.DataFrame(data = x_train
+             , columns = ['PC%d'%(i) for i in range(np.shape(x_train)[1])])
+
+    x_test = pd.DataFrame(data = x_test
+             , columns = ['PC%d'%(i) for i in range(np.shape(x_train)[1])])
+
+    # Moving average Window
+    x_train = x_train.rolling(10, min_periods = 1).mean()
+    x_test = x_test.rolling(10, min_periods = 1).mean()
+
+    y_train = y_train.rolling(10, min_periods=1).apply(check)
+    y_test = y_test.rolling(10, min_periods=1).apply(check)
+
+
+    return  x_train.values, x_test.values,  y_test.values
 
 
 # SWaT DATA LOAD Func
